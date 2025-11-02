@@ -57,7 +57,7 @@ def parse_feed(feed_url):
             # Clean summary dari tag HTML
             summary = re.sub('<[^<]+?>', '', summary)
             
-            # Konversi tanggal ke datetime object untuk filtering
+            # Konversi tanggal ke datetime object
             published_date = None
             published_dt = None
             if published:
@@ -91,45 +91,52 @@ def parse_feed(feed_url):
 def get_all_news_dataframe(selected_feeds):
     """Mengambil semua berita dan menyimpan dalam dataframe"""
     if not selected_feeds:
-        return pd.DataFrame(), "⚠️ Pilih setidaknya satu portal berita"
+        st.warning("⚠️ Pilih setidaknya satu portal berita")
+        return pd.DataFrame()
     
     all_articles_data = []
     
-    for feed_name in selected_feeds:
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    for idx, feed_name in enumerate(selected_feeds):
         if feed_name in RSS_FEEDS:
-            with st.spinner(f"Mengambil data dari {feed_name}..."):
-                articles = parse_feed(RSS_FEEDS[feed_name])
-                for article in articles:
-                    # Simpan data dengan metadata yang diminta
-                    article_data = {
-                        'sumber_artikel': feed_name,
-                        'judul_artikel': article['title'],
-                        'url_artikel': article['link'],
-                        'date_stamp': article['published_dt'] if article['published_dt'] else None,
-                        'published_date': article['published_date'],
-                        'published_string': article['published'],
-                        'summary': article['summary']
-                    }
-                    all_articles_data.append(article_data)
+            status_text.text(f"🔄 Mengambil data dari: {feed_name}")
+            articles = parse_feed(RSS_FEEDS[feed_name])
+            for article in articles:
+                # Simpan data dengan metadata yang diminta
+                article_data = {
+                    'sumber_artikel': feed_name,
+                    'judul_artikel': article['title'],
+                    'url_artikel': article['link'],
+                    'date_stamp': article['published_dt'] if article['published_dt'] else None,
+                    'published_date': article['published_date'],
+                    'published_string': article['published'],
+                    'summary': article['summary']
+                }
+                all_articles_data.append(article_data)
+            
+            progress_bar.progress((idx + 1) / len(selected_feeds))
+    
+    status_text.empty()
+    progress_bar.empty()
     
     # Buat dataframe dari semua artikel
     if all_articles_data:
         df = pd.DataFrame(all_articles_data)
-        
         # Urutkan berdasarkan tanggal
         df = df.sort_values('date_stamp', ascending=False)
-        
-        info_message = f"✅ **Data berhasil diambil!**  \n📊 **Total artikel:** {len(df)} dari {len(selected_feeds)} portal berita"
-        return df, info_message
+        return df
     else:
-        return pd.DataFrame(), "❌ Tidak ada artikel yang ditemukan"
+        st.error("❌ Tidak ada artikel yang ditemukan")
+        return pd.DataFrame()
 
 def filter_dataframe(df, query, filter_type, custom_days):
     """Filter dataframe berdasarkan pencarian dan tanggal"""
     if df.empty:
-        return pd.DataFrame(), "⚠️ Tidak ada data yang tersedia"
+        st.warning("⚠️ Tidak ada data yang tersedia")
+        return df
     
-    # Buat copy dataframe untuk filtering
     filtered_df = df.copy()
     
     # Filter berdasarkan kata kunci
@@ -175,35 +182,51 @@ def filter_dataframe(df, query, filter_type, custom_days):
             )
             filtered_df = filtered_df[date_mask]
     
-    # Format output
-    if filtered_df.empty:
-        info_message = f"❌ **Tidak ada artikel yang sesuai dengan filter**  \n"
-        if query:
-            info_message += f"🔎 **Kata kunci:** '{query}'  \n"
-        if filter_type != "Semua Artikel":
-            info_message += f"📅 **Filter waktu:** {filter_type}"
-            if filter_type == "custom" and custom_days:
-                info_message += f" ({custom_days} hari)"
-        return pd.DataFrame(), info_message
+    return filtered_df
+
+def display_articles(df, title):
+    """Menampilkan artikel dalam format dataframe dengan link yang bisa diklik"""
+    if df.empty:
+        st.warning(f"❌ Tidak ada artikel untuk {title}")
+        return
     
-    # Urutkan berdasarkan tanggal
-    filtered_df = filtered_df.sort_values('date_stamp', ascending=False)
+    # Buat dataframe untuk display
+    display_df = df[['sumber_artikel', 'judul_artikel', 'url_artikel', 'published_string']].copy()
+    display_df.columns = ['Sumber', 'Judul Artikel', 'URL', 'Tanggal Publikasi']
     
-    # Info summary
-    info_message = f"🔍 **Hasil Pencarian**  \n"
-    info_message += f"📊 **Ditemukan {len(filtered_df)} artikel**  \n"
+    # Potong judul yang terlalu panjang untuk display
+    display_df['Judul Artikel'] = display_df['Judul Artikel'].apply(
+        lambda x: x[:80] + '...' if len(x) > 80 else x
+    )
     
-    if query:
-        info_message += f"🔎 **Kata kunci:** '{query}'  \n"
+    # Tampilkan dataframe
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True
+    )
     
-    if filter_type != "Semua Artikel":
-        info_message += f"📅 **Filter waktu:** {filter_type}"
-        if filter_type == "custom" and custom_days:
-            info_message += f" ({custom_days} hari)"
-    else:
-        info_message += f"📅 **Filter waktu:** Semua artikel"
-    
-    return filtered_df, info_message
+    # Tampilkan detail artikel yang dipilih
+    if len(df) > 0:
+        st.subheader("📖 Detail Artikel")
+        selected_idx = st.selectbox(
+            "Pilih artikel untuk melihat detail:",
+            range(len(df)),
+            format_func=lambda x: f"{df.iloc[x]['judul_artikel'][:100]}..."
+        )
+        
+        if selected_idx is not None:
+            article = df.iloc[selected_idx]
+            col1, col2 = st.columns([3, 1])
+            
+            with col1:
+                st.write(f"**Judul:** {article['judul_artikel']}")
+                st.write(f"**Sumber:** {article['sumber_artikel']}")
+                st.write(f"**Tanggal:** {article['published_string']}")
+                st.write(f"**Ringkasan:** {article['summary']}")
+            
+            with col2:
+                st.link_button("📖 Baca Selengkapnya", article['url_artikel'])
 
 # Konfigurasi halaman Streamlit
 st.set_page_config(
@@ -215,41 +238,34 @@ st.set_page_config(
 
 # Sidebar untuk pengaturan
 with st.sidebar:
-    st.title("📰 RSS Reader")
-    st.markdown("Aplikasi untuk membaca berita terbaru dari berbagai portal berita Indonesia")
+    st.title("⚙️ Pengaturan")
     
-    st.markdown("---")
-    st.subheader("⚙️ Pengaturan")
-    
-    # Pilih portal berita
+    st.subheader("📊 Portal Berita")
     selected_feeds = st.multiselect(
-        "Pilih Portal Berita",
+        "Pilih portal berita:",
         options=list(RSS_FEEDS.keys()),
         default=list(RSS_FEEDS.keys())[:4],
         help="Pilih portal berita yang ingin ditampilkan"
     )
     
-    # Tombol untuk mengambil semua berita
     if st.button("📋 Tampilkan Semua Berita", type="primary", use_container_width=True):
         with st.spinner("Mengambil data berita..."):
-            df, message = get_all_news_dataframe(selected_feeds)
-            st.session_state.df = df
-            st.session_state.info_message = message
+            st.session_state.df = get_all_news_dataframe(selected_feeds)
     
-    st.markdown("---")
+    st.divider()
+    
     st.subheader("🔍 Filter & Pencarian")
     
     # Pilihan filter waktu
-    time_filter = st.selectbox(
-        "Filter Berdasarkan Waktu",
+    filter_type = st.radio(
+        "Filter Berdasarkan Waktu:",
         options=["Semua Artikel", "Hari Ini", "Kemarin", "Satu minggu terakhir", "Satu bulan terakhir", "custom"],
         index=0,
         help="Pilih rentang waktu untuk memfilter artikel"
     )
     
-    # Input untuk custom days
     custom_days = None
-    if time_filter == "custom":
+    if filter_type == "custom":
         custom_days = st.number_input(
             "... hari lalu",
             min_value=1,
@@ -258,33 +274,67 @@ with st.sidebar:
             help="Masukkan jumlah hari yang ingin ditampilkan"
         )
     
-    # Input pencarian
     search_query = st.text_input(
-        "Kata Kunci Pencarian",
+        "Kata Kunci Pencarian:",
         placeholder="Masukkan kata kunci (contoh: politik, olahraga, ekonomi)...",
         help="Cari artikel berdasarkan kata kunci dalam judul atau ringkasan"
     )
     
-    # Tombol terapkan filter
-    if st.button("🔎 Terapkan Filter", use_container_width=True):
-        if 'df' in st.session_state and not st.session_state.df.empty:
-            filtered_df, filter_message = filter_dataframe(
-                st.session_state.df, search_query, time_filter, custom_days
-            )
-            st.session_state.filtered_df = filtered_df
-            st.session_state.filter_message = filter_message
-        else:
-            st.warning("Silakan klik 'Tampilkan Semua Berita' terlebih dahulu")
+    st.divider()
     
-    st.markdown("---")
     st.subheader("ℹ️ Cara Penggunaan:")
     st.markdown("""
-    1. Pilih portal berita
-    2. Klik **Tampilkan Semua Berita** (data akan disimpan)
-    3. Gunakan filter waktu dan kata kunci
-    4. Klik **Terapkan Filter** untuk melihat hasil
+    1. **Pilih portal berita** di sidebar
+    2. **Klik 'Tampilkan Semua Berita'** untuk mengambil data
+    3. **Gunakan filter** waktu dan kata kunci
+    4. **Data akan otomatis** terfilter berdasarkan pilihan
     """)
 
-# Konten utama
-st.title("📰 RSS Feed Reader - Portal Berita Indonesia")
-st.markdown("Klik
+# Main content
+st.title("📰 RSS Reader - Portal Berita Indonesia")
+st.markdown("Aplikasi untuk membaca berita terbaru dari berbagai portal berita Indonesia")
+
+# Inisialisasi session state
+if 'df' not in st.session_state:
+    st.session_state.df = pd.DataFrame()
+
+# Tampilkan data berdasarkan filter
+if not st.session_state.df.empty:
+    # Filter data
+    filtered_df = filter_dataframe(st.session_state.df, search_query, filter_type, custom_days)
+    
+    # Tampilkan informasi summary
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("Total Artikel", len(st.session_state.df))
+    
+    with col2:
+        st.metric("Artikel Difilter", len(filtered_df))
+    
+    with col3:
+        if search_query:
+            st.metric("Kata Kunci", f"'{search_query}'")
+        else:
+            st.metric("Filter Waktu", filter_type)
+    
+    # Tampilkan tab untuk berbagai view
+    tab1, tab2 = st.tabs(["📊 Semua Artikel", "🔍 Hasil Pencarian"])
+    
+    with tab1:
+        st.subheader("Semua Artikel yang Diambil")
+        display_articles(st.session_state.df, "semua artikel")
+    
+    with tab2:
+        st.subheader("Hasil Pencarian")
+        if search_query or filter_type != "Semua Artikel":
+            display_articles(filtered_df, "hasil pencarian")
+        else:
+            st.info("🔍 Gunakan filter di sidebar untuk melihat hasil pencarian")
+    
+else:
+    st.info("👈 Pilih portal berita dan klik 'Tampilkan Semua Berita' di sidebar untuk memulai")
+
+# Footer
+st.divider()
+st.caption("Dibuat dengan Streamlit • Data dari berbagai portal berita Indonesia")
