@@ -49,6 +49,8 @@ def parse_feed(feed_url):
             link = entry.get('link', '')
             published = entry.get('published', '')
             summary = entry.get('summary', '')
+            content = entry.get('content', [{}])[0].get('value', '') if entry.get('content') else ''
+            author = entry.get('author', '')
             
             # Jika tidak ada summary, gunakan description
             if not summary:
@@ -56,6 +58,7 @@ def parse_feed(feed_url):
             
             # Clean summary dari tag HTML
             summary = re.sub('<[^<]+?>', '', summary)
+            content = re.sub('<[^<]+?>', '', content)
             
             # Konversi tanggal ke datetime object
             published_date = None
@@ -80,7 +83,10 @@ def parse_feed(feed_url):
                 'published': published,
                 'published_date': published_date,
                 'published_dt': published_dt,
-                'summary': summary
+                'summary': summary,
+                'content': content,
+                'author': author,
+                'full_content': title + ". " + (content if content else summary)
             })
         
         return articles
@@ -112,7 +118,10 @@ def get_all_news_dataframe(selected_feeds):
                     'date_stamp': article['published_dt'] if article['published_dt'] else None,
                     'published_date': article['published_date'],
                     'published_string': article['published'],
-                    'summary': article['summary']
+                    'summary': article['summary'],
+                    'content': article['content'],
+                    'author': article['author'],
+                    'full_content': article['full_content']
                 }
                 all_articles_data.append(article_data)
             
@@ -144,7 +153,8 @@ def filter_dataframe(df, query, filter_type, custom_days):
         query_lower = query.lower()
         keyword_mask = (
             filtered_df['judul_artikel'].str.lower().str.contains(query_lower, na=False) |
-            filtered_df['summary'].str.lower().str.contains(query_lower, na=False)
+            filtered_df['summary'].str.lower().str.contains(query_lower, na=False) |
+            filtered_df['content'].str.lower().str.contains(query_lower, na=False)
         )
         filtered_df = filtered_df[keyword_mask]
     
@@ -184,49 +194,93 @@ def filter_dataframe(df, query, filter_type, custom_days):
     
     return filtered_df
 
-def display_articles(df, title):
-    """Menampilkan artikel dalam format dataframe dengan link yang bisa diklik"""
+def display_article_detail(article):
+    """Menampilkan detail metadata artikel yang terpilih"""
+    st.subheader("📋 Detail Metadata Artikel")
+    
+    # Tampilkan dalam bentuk columns untuk layout yang lebih rapi
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.markdown("### Informasi Artikel")
+        st.write(f"**📰 Judul:** {article['judul_artikel']}")
+        st.write(f"**🏢 Sumber:** {article['sumber_artikel']}")
+        st.write(f"**📅 Tanggal Publikasi:** {article['published_string']}")
+        st.write(f"**👤 Penulis:** {article['author'] if article['author'] else 'Tidak tersedia'}")
+        
+        st.markdown("### Ringkasan")
+        st.write(article['summary'])
+    
+    with col2:
+        st.markdown("### Metadata Teknis")
+        st.write(f"**🔗 URL:**")
+        st.code(article['url_artikel'], language='text')
+        
+        st.write(f"**📊 Date Stamp:**")
+        if article['date_stamp']:
+            st.code(article['date_stamp'].strftime('%Y-%m-%d %H:%M:%S'), language='text')
+        else:
+            st.code("Tidak tersedia", language='text')
+        
+        st.write(f"**📝 Panjang Konten:**")
+        content_length = len(article['content']) if article['content'] else 0
+        summary_length = len(article['summary']) if article['summary'] else 0
+        st.code(f"Konten: {content_length} karakter\nRingkasan: {summary_length} karakter", language='text')
+    
+    # Tombol untuk membuka artikel
+    st.markdown("---")
+    col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 1])
+    
+    with col_btn2:
+        st.link_button("📖 Baca Artikel Lengkap", article['url_artikel'], use_container_width=True)
+    
+    # Tampilkan konten lengkap jika tersedia
+    if article['content'] and len(article['content']) > len(article['summary']):
+        with st.expander("📄 Lihat Konten Lengkap"):
+            st.write(article['content'])
+
+def display_articles_with_selection(df, title, key_suffix):
+    """Menampilkan artikel dalam format dataframe dengan selection"""
     if df.empty:
         st.warning(f"❌ Tidak ada artikel untuk {title}")
-        return
+        return None
     
     # Buat dataframe untuk display
     display_df = df[['sumber_artikel', 'judul_artikel', 'url_artikel', 'published_string']].copy()
     display_df.columns = ['Sumber', 'Judul Artikel', 'URL', 'Tanggal Publikasi']
     
     # Potong judul yang terlalu panjang untuk display
-    display_df['Judul Artikel'] = display_df['Judul Artikel'].apply(
+    display_df['Judul Artikel Display'] = display_df['Judul Artikel'].apply(
         lambda x: x[:80] + '...' if len(x) > 80 else x
     )
     
+    # Buat pilihan untuk selectbox
+    article_options = [
+        f"{row['Judul Artikel Display']} | {row['Sumber']} | {row['Tanggal Publikasi']}" 
+        for _, row in display_df.iterrows()
+    ]
+    
     # Tampilkan dataframe
     st.dataframe(
-        display_df,
+        display_df[['Sumber', 'Judul Artikel Display', 'Tanggal Publikasi']],
         use_container_width=True,
         hide_index=True
     )
     
-    # Tampilkan detail artikel yang dipilih
-    if len(df) > 0:
-        st.subheader("📖 Detail Artikel")
-        selected_idx = st.selectbox(
-            "Pilih artikel untuk melihat detail:",
-            range(len(df)),
-            format_func=lambda x: f"{df.iloc[x]['judul_artikel'][:100]}..."
-        )
-        
-        if selected_idx is not None:
-            article = df.iloc[selected_idx]
-            col1, col2 = st.columns([3, 1])
-            
-            with col1:
-                st.write(f"**Judul:** {article['judul_artikel']}")
-                st.write(f"**Sumber:** {article['sumber_artikel']}")
-                st.write(f"**Tanggal:** {article['published_string']}")
-                st.write(f"**Ringkasan:** {article['summary']}")
-            
-            with col2:
-                st.link_button("📖 Baca Selengkapnya", article['url_artikel'])
+    # Selectbox untuk memilih artikel
+    st.subheader("🔍 Pilih Artikel untuk Detail")
+    selected_article_idx = st.selectbox(
+        f"Pilih artikel dari {title}:",
+        options=range(len(df)),
+        format_func=lambda x: article_options[x],
+        key=f"select_{key_suffix}"
+    )
+    
+    if selected_article_idx is not None:
+        selected_article = df.iloc[selected_article_idx]
+        return selected_article
+    
+    return None
 
 # Konfigurasi halaman Streamlit
 st.set_page_config(
@@ -287,7 +341,7 @@ with st.sidebar:
     1. **Pilih portal berita** di sidebar
     2. **Klik 'Tampilkan Semua Berita'** untuk mengambil data
     3. **Gunakan filter** waktu dan kata kunci
-    4. **Data akan otomatis** terfilter berdasarkan pilihan
+    4. **Pilih artikel** dari tabel untuk melihat detail metadata
     """)
 
 # Main content
@@ -297,6 +351,10 @@ st.markdown("Aplikasi untuk membaca berita terbaru dari berbagai portal berita I
 # Inisialisasi session state
 if 'df' not in st.session_state:
     st.session_state.df = pd.DataFrame()
+if 'selected_article_all' not in st.session_state:
+    st.session_state.selected_article_all = None
+if 'selected_article_search' not in st.session_state:
+    st.session_state.selected_article_search = None
 
 # Tampilkan data berdasarkan filter
 if not st.session_state.df.empty:
@@ -304,7 +362,7 @@ if not st.session_state.df.empty:
     filtered_df = filter_dataframe(st.session_state.df, search_query, filter_type, custom_days)
     
     # Tampilkan informasi summary
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col_3 = st.columns(3)
     
     with col1:
         st.metric("Total Artikel", len(st.session_state.df))
@@ -312,7 +370,7 @@ if not st.session_state.df.empty:
     with col2:
         st.metric("Artikel Difilter", len(filtered_df))
     
-    with col3:
+    with col_3:
         if search_query:
             st.metric("Kata Kunci", f"'{search_query}'")
         else:
@@ -323,14 +381,46 @@ if not st.session_state.df.empty:
     
     with tab1:
         st.subheader("Semua Artikel yang Diambil")
-        display_articles(st.session_state.df, "semua artikel")
+        selected_article_all = display_articles_with_selection(
+            st.session_state.df, 
+            "semua artikel", 
+            "all"
+        )
+        
+        # Simpan selected article di session state
+        if selected_article_all is not None:
+            st.session_state.selected_article_all = selected_article_all
     
     with tab2:
         st.subheader("Hasil Pencarian")
         if search_query or filter_type != "Semua Artikel":
-            display_articles(filtered_df, "hasil pencarian")
+            selected_article_search = display_articles_with_selection(
+                filtered_df, 
+                "hasil pencarian", 
+                "search"
+            )
+            
+            # Simpan selected article di session state
+            if selected_article_search is not None:
+                st.session_state.selected_article_search = selected_article_search
         else:
             st.info("🔍 Gunakan filter di sidebar untuk melihat hasil pencarian")
+    
+    # Tampilkan detail artikel yang terpilih
+    st.markdown("---")
+    
+    # Tentukan artikel mana yang akan ditampilkan (prioritaskan dari tab aktif)
+    if tab2._active:
+        selected_article = st.session_state.selected_article_search
+        tab_source = "Hasil Pencarian"
+    else:
+        selected_article = st.session_state.selected_article_all
+        tab_source = "Semua Artikel"
+    
+    if selected_article is not None:
+        display_article_detail(selected_article)
+    else:
+        st.info("👆 Pilih artikel dari tabel di atas untuk melihat detail metadata")
     
 else:
     st.info("👈 Pilih portal berita dan klik 'Tampilkan Semua Berita' di sidebar untuk memulai")
